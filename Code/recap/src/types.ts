@@ -4,10 +4,10 @@ import type { AnyActorRef } from "xstate";
 export interface DMContext {
   spstRef: AnyActorRef;
   lastResult: string;
-  // nextUtterance: string;
   informationState: { latestMove: string };
   messages: Message[];
   ollamaModels: String[];
+  lastContradiction?: "contradiction" | "no_contradiction" | null;
 }
 
 export type DMEvents =
@@ -20,4 +20,13 @@ export type DMEvents =
 export type Message = {
   role: "assistant" | "user" | "system";
   content: string;
+}
+
+export interface ContradictionInput {
+  utterances: string[];
+  annotation_target_pair?: number[];
+}
+
+export interface ContradictionOutput {
+  prediction: "contradiction" | "no_contradiction";
 }

@@ -1,7 +1,7 @@
 import { assign, createActor,  setup, fromPromise} from "xstate";
 import { speechstate } from "speechstate";
 import type { Settings } from "speechstate";
-import type { DMEvents, DMContext, Message} from "./types";
+import type { DMEvents, DMContext, Message,ContradictionOutput, ContradictionInput} from "./types";
 import { KEY } from "./azure";
 
 const azureCredentials = {
@@ -46,8 +46,39 @@ const dmMachine = setup({
         body: JSON.stringify(body),
       }).then((response) => response.json());
     }
-    ) 
-  },
+    ) ,
+contradictionModel: fromPromise<ContradictionOutput, ContradictionInput>(async ({ input }) => {
+  console.log("=== Fetching contradiction ===");
+  console.log("Input:", input);
+
+  try {
+    const response = await fetch("http://127.0.0.1:8000/predict", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+
+    console.log("HTTP status:", response.status);
+
+    const data = await response.json();
+    console.log("Response data:", data);
+
+    if (!data || (data.prediction !== "contradiction" && data.prediction !== "no_contradiction")) {
+      console.error("Invalid ContradictionOutput:", data);
+      throw new Error("Returned object is not a valid ContradictionOutput");
+    }
+
+    console.log("Contradiction resolved with:", data);
+    return data as ContradictionOutput;
+  } catch (err) {
+    console.error("Contradiction fetch failed:", err);
+    throw err; 
+  }
+}),
+
+
+
+},
 }).createMachine({
   id: "DM",
   context: ({ spawn }) => ({
@@ -56,6 +87,7 @@ const dmMachine = setup({
     lastResult: "",
     messages:[],
     ollamaModels:[],
+    lastContradiction: null,
   }),
   initial: "Prepare",
   states: {
@@ -87,7 +119,7 @@ const dmMachine = setup({
             messages: [
               {
                 role: "system",
-                content: `Hello! The models are ${context.ollamaModels?.join(" ")}`
+                content: `Hello!`
               },
               ...context.messages
             ]
@@ -110,44 +142,89 @@ const dmMachine = setup({
         entry: "sst_listen",
         on: {
           LISTEN_COMPLETE:{
-            target:"ChatCompletion"
+            target:"CheckContradiction"
           },
-          RECOGNISED:{
+          RECOGNISED: {
             actions: assign(({ event, context }) => ({
-              ...context.messages,
-              messages: [{role: "user", content: event.value[0].utterance}, 
+              messages: [
+                ...context.messages,               
+                { role: "user", content: event.value[0].utterance },
               ],
             })),
           },
-          ASR_NOINPUT:{
-            target: "ChatCompletion",
-            actions: assign(({context}) => ({
-              messages:[
+          ASR_NOINPUT: {
+            target: "CheckContradiction",
+            actions: assign(({ context }) => ({
+              messages: [
                 ...context.messages,
-                {role:"user",content: ""}
-              ]
-            }))
+                { role: "user", content: "" },
+              ],
+            })),
           },
         },
       },
 
-      ChatCompletion:{
-        invoke:{
+      CheckContradiction: {
+        invoke: {
+            src: "contradictionModel",
+            input: ({ context }): ContradictionInput => {
+                const userMessages = context.messages.filter(m => m.role === "user");
+                const recentMessages = userMessages.slice(-2); 
+                
+                const utterances = recentMessages.map(m => {
+                    const text = m.content.trim();
+                    return text.endsWith('.') ? text : text + '.';
+                });
+                console.log("=== Contradiction Input ===");
+                console.log("Recent user messages:", recentMessages);
+                console.log("Utterances array:", utterances);
+
+                return {
+                    utterances,
+                    annotation_target_pair: [
+                        0,
+                        recentMessages.length - 1,
+                    ],
+                };
+            },
+            onDone: { 
+                target: "#DM.Main.ChatCompletion",
+                actions: assign(({ event }) => ({
+                    lastContradiction: event.output.prediction,
+                })),
+            },
+            onError: { 
+                target: "#DM.Main.ChatCompletion",
+                actions: ({ event }) => console.error(" onError triggered:", event.error),
+            },
+        },
+      },
+
+      ChatCompletion: {
+        invoke: {
           src: "modelReply",
-          input: (context) => context.context.messages,
-          onDone:{
+          input: (context) => {
+            const messagesForLLM: Message[] = [
+              {
+                role: "system",
+                content: context.context.lastContradiction
+                  ? `Note: The last user message is classified as ${context.context.lastContradiction}.`
+                  : "You are a helpful assistant.",
+              },
+              ...context.context.messages,
+            ];
+            return messagesForLLM;
+          },
+          onDone: {
             target: "Speaking",
-            actions: assign(({event, context}) => {
-              console.log("Raw output:", event.output);
-              return {
-                messages:[
-                  ...context.messages,
-                  {role:"assistant",content: event.output.message.content},
-                ]
-              }
-            })
-          }
-        }
+            actions: assign(({ event, context }) => ({
+              messages: [
+                ...context.messages,
+                { role: "assistant", content: event.output.message.content },
+              ],
+            })),
+          },
+        },
       },
 
       Speaking: {
@@ -163,6 +240,14 @@ const dmMachine = setup({
         },
         on: { SPEAK_COMPLETE: "Ask" },
       },
+
+      Done: {
+        type: "final",
+        entry: () => {
+          console.log("Conversation finished.");
+  }
+}
+
 
       },
     },
