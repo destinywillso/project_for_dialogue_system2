@@ -47,36 +47,35 @@ const dmMachine = setup({
       }).then((response) => response.json());
     }
     ) ,
-contradictionModel: fromPromise<ContradictionOutput, ContradictionInput>(async ({ input }) => {
-  console.log("=== Fetching contradiction ===");
-  console.log("Input:", input);
+    contradictionModel: fromPromise<ContradictionOutput, ContradictionInput>(async ({ input }) => {
+      console.log("Fetching contradiction");
+      console.log("Input:", input);
 
-  try {
-    const response = await fetch("http://127.0.0.1:8000/predict", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input),
-    });
+      try {
+        const response = await fetch("http://127.0.0.1:8000/predict", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(input),
+        });
 
-    console.log("HTTP status:", response.status);
+        console.log("HTTP status:", response.status);
 
-    const data = await response.json();
-    console.log("Response data:", data);
+        const data = await response.json();
+        console.log("Response data:", data);
 
-    if (!data || (data.prediction !== "contradiction" && data.prediction !== "no_contradiction")) {
-      console.error("Invalid ContradictionOutput:", data);
-      throw new Error("Returned object is not a valid ContradictionOutput");
+        if (!data || (data.prediction !== "contradiction" && data.prediction !== "no_contradiction")) {
+          console.error("Invalid ContradictionOutput:", data);
+          throw new Error("Returned object is not a valid ContradictionOutput");
+        }
+
+        console.log("Contradiction resolved with:", data);
+        return data as ContradictionOutput;
+      } catch (err) {
+        console.error("Contradiction fetch failed:", err);
+        throw err; 
+      }
     }
-
-    console.log("Contradiction resolved with:", data);
-    return data as ContradictionOutput;
-  } catch (err) {
-    console.error("Contradiction fetch failed:", err);
-    throw err; 
-  }
-}),
-
-
+    ),
 
 },
 }).createMachine({
@@ -170,12 +169,12 @@ contradictionModel: fromPromise<ContradictionOutput, ContradictionInput>(async (
             input: ({ context }): ContradictionInput => {
                 const userMessages = context.messages.filter(m => m.role === "user");
                 const recentMessages = userMessages.slice(-2); 
-                
+
                 const utterances = recentMessages.map(m => {
                     const text = m.content.trim();
                     return text.endsWith('.') ? text : text + '.';
                 });
-                console.log("=== Contradiction Input ===");
+                console.log("Contradiction Input");
                 console.log("Recent user messages:", recentMessages);
                 console.log("Utterances array:", utterances);
 
@@ -188,13 +187,13 @@ contradictionModel: fromPromise<ContradictionOutput, ContradictionInput>(async (
                 };
             },
             onDone: { 
-                target: "#DM.Main.ChatCompletion",
+                target: "ChatCompletion",
                 actions: assign(({ event }) => ({
                     lastContradiction: event.output.prediction,
                 })),
             },
             onError: { 
-                target: "#DM.Main.ChatCompletion",
+                target: "ChatCompletion",
                 actions: ({ event }) => console.error(" onError triggered:", event.error),
             },
         },
